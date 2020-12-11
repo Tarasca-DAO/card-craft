@@ -60,6 +60,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         TransactionResponse triggerTransaction = context.getTransaction();
 
+        long minFeeRateNQTPerFXT = Convert.parseUnsignedLong(params.getString("minRateNQTPerFXT"));
+        long maxFeeRateNQTPerFXT = Convert.parseUnsignedLong(params.getString("maxRateNQTPerFXT"));
+
         JA rates = nxt.http.callers.GetBundlerRatesCall.create()
                 .minBundlerBalanceFXT(10)
                 .minBundlerFeeLimitFQT(1)
@@ -70,15 +73,13 @@ public class TarascaDAOCardCraft extends AbstractContract {
         for(JO rate : rates.objects()) {
             if(rate.getInt("chain") == chainId) {
                 feeRateNQTPerFXT = Convert.parseUnsignedLong(rate.getString("minRateNQTPerFXT"));
+
+                if(feeRateNQTPerFXT < minFeeRateNQTPerFXT)
+                    feeRateNQTPerFXT = minFeeRateNQTPerFXT;
+
+                if (feeRateNQTPerFXT > maxFeeRateNQTPerFXT)
+                    feeRateNQTPerFXT = maxFeeRateNQTPerFXT;
             }
-        }
-
-        long maxFeeRateNQTPerFXT = Convert.parseUnsignedLong(params.getString("maxRateNQTPerFXT"));
-
-        if(maxFeeRateNQTPerFXT > 0) {
-
-            if (feeRateNQTPerFXT > maxFeeRateNQTPerFXT)
-                feeRateNQTPerFXT = maxFeeRateNQTPerFXT;
         }
 
         context.logInfoMessage("feeRateNQTPerFXT: " + feeRateNQTPerFXT);
@@ -250,6 +251,10 @@ public class TarascaDAOCardCraft extends AbstractContract {
     }
 
     private void broadcastIncomePayment(TransactionContext context, long recipient, int chainId) {
+
+        if(recipient == Convert.parseAccountId(context.getAccount()))
+            return;
+
         long amountNQT = totalCostNQT; // NOTE sender needs extra balance to support variable fee
 
         if(amountNQT <= 0)
