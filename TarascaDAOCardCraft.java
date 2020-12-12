@@ -43,7 +43,16 @@ public class TarascaDAOCardCraft extends AbstractContract {
         JA jsonTierPromotionCostArray = params.getArray("tierPromotionCost");
         long assetCountForPromotion = Convert.parseUnsignedLong(params.getString("tierPromotionRequiredCount"));
 
-        long incomeAccount = Convert.parseAccountId(params.getString("incomeAccountRS"));
+        JA paymentAccountArray = params.getArray("paymentAccountRS");
+        JA paymentAccountFractionArray = params.getArray("paymentFractionFloat");
+
+        if(paymentAccountArray == null || paymentAccountFractionArray == null) {
+            paymentAccountArray = null;
+            paymentAccountFractionArray = null;
+        }
+
+        if((paymentAccountArray != null) && (paymentAccountArray.toJSONArray().size() != (paymentAccountFractionArray.toJSONArray().size())))
+            return new JO(); // contract not yet configured
 
         long returnFeeNQT = Convert.parseUnsignedLong(params.getString("returnFeeNQT"));
         long returnMinimumNQT = Convert.parseUnsignedLong(params.getString("returnMinimumNQT"));
@@ -86,6 +95,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         senderBalanceNQT = 0;
         totalCostNQT = 0;
+
+        List<Long> listPaymentAccount = listAccountIdFromRSArray(paymentAccountArray);
+        List<Double> listPaymentSplit = listDoubleFromArray(paymentAccountFractionArray);
 
         List<SortedSet<Long>> listSetTierDefinition = listSetFromJsonTierArray(jsonTierArray);
         List<Long> listTierPromotionCost = listLongFromJsonStringArray(jsonTierPromotionCostArray);
@@ -142,7 +154,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         broadcastReturnExcessPayment(context, returnFeeNQT, returnMinimumNQT, chainId);
 
-        broadcastIncomePayment(context, incomeAccount, chainId);
+        broadcastPaymentSplit(context, listPaymentAccount, listPaymentSplit, chainId);
 
         return context.getResponse();
     }
@@ -250,30 +262,40 @@ public class TarascaDAOCardCraft extends AbstractContract {
         return assetId;
     }
 
-    private void broadcastIncomePayment(TransactionContext context, long recipient, int chainId) {
+    private void broadcastPaymentSplit(TransactionContext context, List<Long> listAccounts, List<Double> listFraction, int chainId) {
 
-        if(recipient == Convert.parseAccountId(context.getAccount()))
+        if(listAccounts == null || listFraction == null)
             return;
 
-        long amountNQT = totalCostNQT; // NOTE sender needs extra balance to support variable fee
+        int count = listAccounts.size();
 
-        if(amountNQT <= 0)
-            return;
+        for(int i = 0; i < count; i++) {
+            long recipient = listAccounts.get(i);
+            double fraction = listFraction.get(i);
 
-        JO response = nxt.http.callers.SendMoneyCall.create(chainId)
-                .privateKey(context.getConfig().getPrivateKey())
-                .recipient(recipient)
-                .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                .ecBlockHeight(context.getBlock().getHeight())
-                .ecBlockId(context.getBlock().getBlockId())
-                .timestamp(context.getBlock().getTimestamp())
-                .deadline(1440)
-                .feeRateNQTPerFXT(feeRateNQTPerFXT)
-                .amountNQT(amountNQT)
-                .broadcast(true)
-                .call();
+            if (recipient == Convert.parseAccountId(context.getAccount()))
+                continue;
 
-        Logger.logInfoMessage(response.toJSONString());
+            long amountNQT = (long) ((double)totalCostNQT * fraction); // NOTE sender needs extra balance to support variable fee
+
+            if (amountNQT <= 0)
+                continue;
+
+            JO response = nxt.http.callers.SendMoneyCall.create(chainId)
+                    .privateKey(context.getConfig().getPrivateKey())
+                    .recipient(recipient)
+                    .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
+                    .ecBlockHeight(context.getBlock().getHeight())
+                    .ecBlockId(context.getBlock().getBlockId())
+                    .timestamp(context.getBlock().getTimestamp())
+                    .deadline(1440)
+                    .feeRateNQTPerFXT(feeRateNQTPerFXT)
+                    .amountNQT(amountNQT)
+                    .broadcast(true)
+                    .call();
+
+            Logger.logInfoMessage(response.toJSONString());
+        }
     }
 
     private void broadcastReturnExcessPayment(TransactionContext context, long returnFeeNQT, long returnMinimumNQT, int chainId) {
@@ -448,6 +470,38 @@ public class TarascaDAOCardCraft extends AbstractContract {
         }
 
         return  tier;
+    }
+
+    private List<Double> listDoubleFromArray(JA jsonValueArray) {
+
+        int jsonArraySize = jsonValueArray.toJSONArray().size();
+
+        if( jsonArraySize == 0)
+            return null;
+
+        List<Double> list = new ArrayList<>();
+
+        for(int i = 0; i < jsonArraySize; i++) {
+            list.add(Double.parseDouble((jsonValueArray.toJSONArray().get(i).toString())));
+        }
+
+        return list;
+    }
+
+    private List<Long> listAccountIdFromRSArray(JA jsonStringArray) {
+
+        int jsonArraySize = jsonStringArray.toJSONArray().size();
+
+        if( jsonArraySize == 0)
+            return null;
+
+        List<Long> list = new ArrayList<>();
+
+        for(int i = 0; i < jsonArraySize; i++) {
+            list.add(Convert.parseAccountId((jsonStringArray.toJSONArray().get(i).toString())));
+        }
+
+        return list;
     }
 
     private List<Long> listLongFromJsonStringArray(JA jsonStringArray) {

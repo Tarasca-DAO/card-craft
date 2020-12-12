@@ -17,7 +17,8 @@
    "tierPromotionRequiredCount": 5,
    "tierPromotionCost": [10000000000, 30000000000],
 
-   "incomeAccountRS": "ARDOR-WDYX-3Q5N-K4HS-CUTKE",
+   "paymentAccountRS": ["ARDOR-WDYX-3Q5N-K4HS-CUTKE", "ARDOR-5NCL-DRBZ-XBWF-DDN5T", "ARDOR-4V3B-TVQA-Q6LF-GMH3T"],
+   "paymentFractionFloat": [0.4, 0.1, 0.5],
 
    "feePriority": "normal",
    "minRateNQTPerFXT": "300000000",
