@@ -2,19 +2,24 @@ package org.tarasca.ardor.contracts;
 
 import nxt.Nxt;
 import nxt.addons.*;
-import nxt.ae.Asset;
 import nxt.crypto.Crypto;
+
 import nxt.http.responses.TransactionResponse;
+
 import nxt.util.Convert;
 import nxt.util.Logger;
-import org.json.simple.JSONArray;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+
 import java.util.*;
+
+import org.json.simple.JSONArray;
+import javax.xml.bind.DatatypeConverter;
 
 public class TarascaDAOCardCraft extends AbstractContract {
 
@@ -31,6 +36,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
     private long senderBalanceNQT = 0;
     private long totalCostNQT = 0;
 
+    String secretForRandomSerialString;
+    byte[] privateKey;
+
     @ValidateContractRunnerIsRecipient
     public JO processTransaction(TransactionContext context) {
 
@@ -38,6 +46,17 @@ public class TarascaDAOCardCraft extends AbstractContract {
         JO params = context.getContractRunnerConfigParams(getClass().getSimpleName());
 
         int chainId = 2;
+
+        {
+            // bypass to allow explicit transaction deadline etc. until there is a standard way to override all default transaction parameters.
+
+            String privateKeyHexString = params.getString("privateKey");
+
+            if (privateKeyHexString == null || privateKeyHexString.length() != 0x40)
+                return new JO(); // contract not yet configured
+
+            privateKey = DatatypeConverter.parseHexBinary(privateKeyHexString);
+        }
 
         JA jsonTierArray = params.getArray("tieredAssetIds");
         JA jsonTierPromotionCostArray = params.getArray("tierPromotionCost");
@@ -97,7 +116,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         totalCostNQT = 0;
 
         List<Long> listPaymentAccount = listAccountIdFromRSArray(paymentAccountArray);
-        List<Double> listPaymentSplit = listDoubleFromArray(paymentAccountFractionArray);
+        List<Double> listPaymentSplit = listDoubleFromJA(paymentAccountFractionArray);
 
         List<SortedSet<Long>> listSetTierDefinition = listSetFromJsonTierArray(jsonTierArray);
         List<Long> listTierPromotionCost = listLongFromJsonStringArray(jsonTierPromotionCostArray);
@@ -171,7 +190,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         MessageDigest digest = Crypto.sha256();
 
         String secretForRandomString = params.getString("secretForRandomString");
-        String secretForRandomSerialString = params.getString("secretForRandomSerialString");
+        secretForRandomSerialString = params.getString("secretForRandomSerialString");
 
         byte[] secretForRandom;
         byte[] secretForRandomSerial;
@@ -203,7 +222,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
             messageAttachment.put("submittedBy", context.getContractName());
 
             JO response = nxt.http.callers.SendMessageCall.create(chainId)
-                    .privateKey(context.getConfig().getPrivateKey())
+                    .privateKey(privateKey)
                     .recipient(context.getTransaction().getSenderId())
                     .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
                     .ecBlockHeight(context.getBlock().getHeight())
@@ -222,7 +241,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
             long quantityQNT = (long) (assetListPick.get(assetId) * Math.pow(10, getAssetDecimals(assetId)));
 
             JO response = nxt.http.callers.TransferAssetCall.create(chainId)
-                    .privateKey(context.getConfig().getPrivateKey())
+                    .privateKey(privateKey)
                     .recipient(context.getTransaction().getSenderId())
                     .message(messageAttachment.toJSONString()).messageIsText(true).messageIsPrunable(true)
                     .ecBlockHeight(context.getBlock().getHeight())
@@ -282,7 +301,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 continue;
 
             JO response = nxt.http.callers.SendMoneyCall.create(chainId)
-                    .privateKey(context.getConfig().getPrivateKey())
+                    .privateKey(privateKey)
                     .recipient(recipient)
                     .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
                     .ecBlockHeight(context.getBlock().getHeight())
@@ -307,7 +326,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
             return;
 
         JO response = nxt.http.callers.SendMoneyCall.create(chainId)
-                .privateKey(context.getConfig().getPrivateKey())
+                .privateKey(privateKey)
                 .recipient(recipient)
                 .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
                 .ecBlockHeight(context.getBlock().getHeight())
@@ -374,6 +393,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
     private void transactionMessageJOAppendContext(TransactionContext context, String contractNameString, TreeSet<String> transactionList) {
         transactionMessageJO.put("submittedBy", contractNameString);
         transactionMessageJO.put("transactionTrigger", Convert.toHexString(context.getTransaction().getFullHash()));
+
+        transactionMessageJO.put("serialForRandom", secretForRandomSerialString);
 
         JSONArray transactionListSpentJA = new JSONArray();
 
@@ -451,7 +472,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
     private int getAssetDecimals(long assetId) {
 
-        return Asset.getAsset(assetId).getDecimals();
+        return nxt.http.callers.GetAssetCall.create().asset(assetId).call().getInt("decimals");
     }
 
     private int getAssetTier(List<SortedSet<Long>> tieredAssetDefinition, long assetId) {
@@ -472,7 +493,23 @@ public class TarascaDAOCardCraft extends AbstractContract {
         return  tier;
     }
 
-    private List<Double> listDoubleFromArray(JA jsonValueArray) {
+    private List<String> listStringFromJA(JA jsonArray) {
+
+        int jsonArraySize = jsonArray.toJSONArray().size();
+
+        if( jsonArraySize == 0)
+            return null;
+
+        List<String> list = new ArrayList<>();
+
+        for(int i = 0; i < jsonArraySize; i++) {
+            list.add((jsonArray.toJSONArray().get(i).toString()));
+        }
+
+        return list;
+    }
+
+    private List<Double> listDoubleFromJA(JA jsonValueArray) {
 
         int jsonArraySize = jsonValueArray.toJSONArray().size();
 
@@ -594,9 +631,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 continue;
             JO messageAsJson = null;
 
-            try {
-                 messageAsJson = JO.parse(message);
-            } catch(IllegalArgumentException e) {/* empty */}
+            try { messageAsJson = JO.parse(message); } catch(IllegalArgumentException e) {/* empty */}
 
             if(messageAsJson == null)
                 continue;
@@ -635,9 +670,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
             JO messageAsJson = null;
 
-            try {
-                messageAsJson = JO.parse(message);
-            } catch(IllegalArgumentException e) {/* empty */}
+            try { messageAsJson = JO.parse(message); } catch(IllegalArgumentException e) {/* empty */}
 
             if(messageAsJson == null)
                 continue;
@@ -648,9 +681,10 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 continue;
 
             int countOfSpentTransactions = invalidatedTransactionArray.size();
+            List<String> listSpentFullHash = listStringFromJA(invalidatedTransactionArray);
 
             for(int j = 0; j < countOfSpentTransactions; j++) {
-                transactionList.add(invalidatedTransactionArray.getString(j));
+                transactionList.add(listSpentFullHash.get(j));
             }
         }
     }
