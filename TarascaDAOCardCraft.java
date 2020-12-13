@@ -25,6 +25,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
     TransactionContext transactionContext;
 
     private static final TreeMap<String, Integer> invalidationCache =  new TreeMap<>();
+    private static final TreeMap<Long, Integer> assetDecimalCache =  new TreeMap<>();
 
     SecureRandom random;
 
@@ -210,6 +211,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         long derivedSeedForAssetPick = ByteBuffer.wrap(digest.digest(), 0, 8).getLong();
         random.setSeed(derivedSeedForAssetPick);
+
+        transactionContext.logInfoMessage("random seed for invocation: " + derivedSeedForAssetPick);
     }
 
     private void broadcastPickedAssets(TransactionContext context, int chainId, HashMap<Long, Long> assetListPick) {
@@ -474,8 +477,26 @@ public class TarascaDAOCardCraft extends AbstractContract {
     }
 
     private int getAssetDecimals(long assetId) {
+        int assetDecimal = 0;
 
-        return nxt.http.callers.GetAssetCall.create().asset(assetId).call().getInt("decimals");
+        boolean cached = false;
+
+        synchronized (assetDecimalCache) {
+            if(assetDecimalCache.containsKey(assetId)) {
+                cached = true;
+                assetDecimal = assetDecimalCache.get(assetId);
+            }
+        }
+
+        if(cached == false) {
+            assetDecimal = nxt.http.callers.GetAssetCall.create().asset(assetId).call().getInt("decimals");
+
+            synchronized (assetDecimalCache) {
+                assetDecimalCache.put(assetId, assetDecimal);
+            }
+        }
+
+        return assetDecimal;
     }
 
     private int getAssetTier(List<SortedSet<Long>> tieredAssetDefinition, long assetId) {
