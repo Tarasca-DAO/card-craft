@@ -266,6 +266,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
         int assetCount = assetList.size();
         int assetIndexPick = (int) (nextDouble * assetCount);
 
+        transactionContext.logInfoMessage("random for pick : " + nextDouble + " : randomIndex : " + assetIndexPick + " / " + (assetCount - 1));
+
         int index = 0;
 
         for (long assetIdPick: assetList) {
