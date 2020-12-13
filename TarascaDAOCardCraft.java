@@ -19,7 +19,6 @@ import java.security.SecureRandom;
 import java.util.*;
 
 import org.json.simple.JSONArray;
-import javax.xml.bind.DatatypeConverter;
 
 public class TarascaDAOCardCraft extends AbstractContract {
 
@@ -55,7 +54,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
             if (privateKeyHexString == null || privateKeyHexString.length() != 0x40)
                 return new JO(); // contract not yet configured
 
-            privateKey = DatatypeConverter.parseHexBinary(privateKeyHexString);
+            privateKey = hexStringToByteArray(privateKeyHexString);
         }
 
         JA jsonTierArray = params.getArray("tieredAssetIds");
@@ -394,7 +393,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
         transactionMessageJO.put("submittedBy", contractNameString);
         transactionMessageJO.put("transactionTrigger", Convert.toHexString(context.getTransaction().getFullHash()));
 
-        transactionMessageJO.put("serialForRandom", secretForRandomSerialString);
+        if(secretForRandomSerialString != null) {
+            transactionMessageJO.put("serialForRandom", secretForRandomSerialString);
+        }
 
         JSONArray transactionListSpentJA = new JSONArray();
 
@@ -687,5 +688,16 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 transactionList.add(listSpentFullHash.get(j));
             }
         }
+    }
+
+    public static byte[] hexStringToByteArray(String s) {
+        int len = s.length();
+        byte[] data = new byte[len / 2];
+
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4) + Character.digit(s.charAt(i + 1), 16));
+        }
+
+        return data;
     }
 }
