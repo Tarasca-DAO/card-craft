@@ -38,6 +38,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
     String secretForRandomSerialString;
     byte[] privateKey;
+    String adminPasswordString;
 
     @ValidateContractRunnerIsRecipient
     public JO processTransaction(TransactionContext context) {
@@ -57,6 +58,14 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
             privateKey = hexStringToByteArray(privateKeyHexString);
         }
+
+        adminPasswordString = params.getString("adminPassword");
+
+        if(adminPasswordString == null || adminPasswordString.equals("")) {
+            transactionContext.logInfoMessage("contract requires admin password (adminPassword)");
+            return new JO();
+        }
+
 
         JA jsonTierArray = params.getArray("tieredAssetIds");
         JA jsonTierPromotionCostArray = params.getArray("tierPromotionCost");
@@ -168,7 +177,6 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 invalidationCache.put(fullHash, Nxt.getEpochTime());
             }
         }
-
         broadcastPickedAssets(context, chainId, assetListPick);
 
         broadcastReturnExcessPayment(context, returnFeeNQT, returnMinimumNQT, chainId);
@@ -488,7 +496,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
             }
         }
 
-        if(cached == false) {
+        if(!cached) {
             assetDecimal = nxt.http.callers.GetAssetCall.create().asset(assetId).call().getInt("decimals");
 
             synchronized (assetDecimalCache) {
@@ -624,6 +632,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
     private void getReceivedTransactions(TreeSet<String> transactionList, TreeMap<String, JO> transactionCache, long recipient, long sender, int chainId, String contractNameString) {
 
         JO response = nxt.http.callers.GetExecutedTransactionsCall.create(chainId)
+                .adminPassword(adminPasswordString)
                 .recipient(recipient)
                 .sender(sender)
                 .call();
@@ -674,7 +683,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
     private void getSpentTransactionsFromSentAssetTransactionMessages(TreeSet<String> transactionList, long recipient, long sender, int chainId) {
 
-        JO response = nxt.http.callers.GetExecutedTransactionsCall.create(chainId).recipient(recipient).sender(sender).call();
+        JO response = nxt.http.callers.GetExecutedTransactionsCall.create(chainId).recipient(recipient).sender(sender).adminPassword(adminPasswordString).call();
         JA arrayOfTransactions = response.getArray("transactions");
 
         int countOfSentAssetTransactions = arrayOfTransactions.size();
