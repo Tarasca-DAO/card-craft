@@ -649,6 +649,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
             if(!attachment.getBoolean("messageIsText"))
                 continue;
 
+            if(attachment.getInt("version.PrunablePlainMessage") == 0)
+                continue;
+
             String message = attachment.getString("message");
 
             if(message == null)
