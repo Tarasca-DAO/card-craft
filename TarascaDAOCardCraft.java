@@ -40,6 +40,10 @@ public class TarascaDAOCardCraft extends AbstractContract {
     byte[] privateKey;
     String adminPasswordString;
 
+    int blockHeightTrigger = 0;
+    long blockIdTrigger = 0;
+    int timeStampTrigger = 0;
+
     @ValidateContractRunnerIsRecipient
     public JO processTransaction(TransactionContext context) {
 
@@ -214,7 +218,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         }
 
         // random seed derived from long from HASH(secretForRandomSerialString | serial | getBlockId | getFullHash)
-        digest.update(ByteBuffer.allocate(Long.BYTES).putLong(context.getBlock().getBlockId()).array());
+        digest.update(ByteBuffer.allocate(Long.BYTES).putLong(blockIdTrigger).array());
         digest.update(context.getTransaction().getFullHash());
 
         long derivedSeedForAssetPick = ByteBuffer.wrap(digest.digest(), 0, 8).getLong();
@@ -235,9 +239,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .privateKey(privateKey)
                     .recipient(context.getTransaction().getSenderId())
                     .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                    .ecBlockHeight(context.getBlock().getHeight())
-                    .ecBlockId(context.getBlock().getBlockId())
-                    .timestamp(context.getBlock().getTimestamp())
+                    .ecBlockHeight(blockHeightTrigger)
+                    .ecBlockId(blockIdTrigger)
+                    .timestamp(timeStampTrigger)
                     .deadline(1440)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .broadcast(true)
@@ -254,9 +258,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .privateKey(privateKey)
                     .recipient(context.getTransaction().getSenderId())
                     .message(messageAttachment.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                    .ecBlockHeight(context.getBlock().getHeight())
-                    .ecBlockId(context.getBlock().getBlockId())
-                    .timestamp(context.getBlock().getTimestamp())
+                    .ecBlockHeight(blockHeightTrigger)
+                    .ecBlockId(blockIdTrigger)
+                    .timestamp(timeStampTrigger)
                     .deadline(1440)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .asset(assetId)
@@ -316,9 +320,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .privateKey(privateKey)
                     .recipient(recipient)
                     .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                    .ecBlockHeight(context.getBlock().getHeight())
-                    .ecBlockId(context.getBlock().getBlockId())
-                    .timestamp(context.getBlock().getTimestamp())
+                    .ecBlockHeight(blockHeightTrigger)
+                    .ecBlockId(blockIdTrigger)
+                    .timestamp(timeStampTrigger)
                     .deadline(1440)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .amountNQT(amountNQT)
@@ -341,9 +345,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 .privateKey(privateKey)
                 .recipient(recipient)
                 .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                .ecBlockHeight(context.getBlock().getHeight())
-                .ecBlockId(context.getBlock().getBlockId())
-                .timestamp(context.getBlock().getTimestamp())
+                .ecBlockHeight(blockHeightTrigger)
+                .ecBlockId(blockIdTrigger)
+                .timestamp(timeStampTrigger)
                 .deadline(1440)
                 .feeNQT(returnFeeNQT)
                 .amountNQT(amountNQT)
@@ -674,6 +678,14 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
             if(!messageAsJson.getString("contract").equals(contractNameString))
                 continue;
+
+            int blockHeight = transactionJO.getInt("height");
+
+            if(blockHeightTrigger < blockHeight) {
+                blockHeightTrigger = blockHeight;
+                blockIdTrigger = Convert.parseUnsignedLong(transactionJO.getString("block"));
+                timeStampTrigger = transactionJO.getInt("timestamp");
+            }
 
             String fullHashString = transactionJO.getString("fullHash");
             transactionList.add(fullHashString);
