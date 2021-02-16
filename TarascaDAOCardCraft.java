@@ -60,7 +60,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
             if (privateKeyHexString == null || privateKeyHexString.length() != 0x40)
                 return new JO(); // contract not yet configured
 
-            privateKey = hexStringToByteArray(privateKeyHexString);
+            privateKey = context.parseHexString(privateKeyHexString);
         }
 
         adminPasswordString = params.getString("adminPassword");
@@ -74,6 +74,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         JA jsonTierArray = params.getArray("tieredAssetIds");
         JA jsonTierPromotionCostArray = params.getArray("tierPromotionCost");
         long assetCountForPromotion = Convert.parseUnsignedLong(params.getString("tierPromotionRequiredCount"));
+        boolean requireIdenticalPerPromotion = params.getBoolean("requireIdenticalPerPromotion");
 
         JA paymentAccountArray = params.getArray("paymentAccountRS");
         JA paymentAccountFractionArray = params.getArray("paymentFractionFloat");
@@ -92,7 +93,6 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         if(jsonTierArray.toJSONArray().size() <= 1 || (jsonTierArray.toJSONArray().size() != (jsonTierPromotionCostArray.toJSONArray().size() + 1)))
             return new JO(); // contract not yet configured
-
 
         String feePriorityString = params.getString("feePriority").toUpperCase();
 
@@ -158,12 +158,13 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         filterTransactionListAndWithInvalidationCache(transactionListFiltered, transactionListReceived, transactionListSpent);
 
-        categorizeReceivedTransactions(transactionListFiltered, listSetTierDefinition, transactionCache, transactionBalance, countAssetReceivedPerTier, chainId);
+        HashMap<Integer, HashMap<Long, Long>> tierAssetReceivedCountList = new HashMap<>();
+        categorizeReceivedTransactions(transactionListFiltered, listSetTierDefinition, transactionCache, transactionBalance, countAssetReceivedPerTier, chainId, tierAssetReceivedCountList);
 
         prepareRandom(context);
 
         HashMap<Long, Long> assetListPick = new HashMap<>();
-        boolean validSetsAndBalance = verifyAllSetsCompletedAndCalculateTotalCostAndPickAssets(countAssetReceivedPerTier, listTierPromotionCost, assetCountForPromotion, listSetTierDefinition, assetListPick);
+        boolean validSetsAndBalance = verifyAllSetsCompletedAndCalculateTotalCostAndPickAssets(countAssetReceivedPerTier, listTierPromotionCost, assetCountForPromotion, listSetTierDefinition, assetListPick, tierAssetReceivedCountList, requireIdenticalPerPromotion);
 
         if(!validSetsAndBalance) {
             context.logInfoMessage("balance : " + (senderBalanceNQT - totalCostNQT) + " = " + senderBalanceNQT + " - " + totalCostNQT);
@@ -357,7 +358,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         Logger.logInfoMessage(response.toJSONString());
     }
 
-    private boolean verifyAllSetsCompletedAndCalculateTotalCostAndPickAssets(HashMap<Integer, Long> countAssetReceivedPerTier, List<Long> tierPromotionCost, long requiredAssetsPerTier, List<SortedSet<Long>> tieredAssetDefinition, HashMap<Long, Long> assetListPick) {
+    private boolean verifyAllSetsCompletedAndCalculateTotalCostAndPickAssets(HashMap<Integer, Long> countAssetReceivedPerTier, List<Long> tierPromotionCost, long requiredAssetsPerTier, List<SortedSet<Long>> tieredAssetDefinition, HashMap<Long, Long> assetListPick, HashMap<Integer, HashMap<Long, Long>> tierAssetReceivedCountList, boolean requireIdenticalPerPromotion) {
         boolean isValid = true;
 
         long totalPickCount = 0;
@@ -366,9 +367,22 @@ public class TarascaDAOCardCraft extends AbstractContract {
             long tierAssetCount = countAssetReceivedPerTier.get(tier);
 
             if(tierAssetCount % requiredAssetsPerTier != 0) {
-                transactionContext.logInfoMessage("quitting : missing " + (requiredAssetsPerTier - (tierAssetCount % requiredAssetsPerTier)) + " to complete set for tier");
+                transactionContext.logInfoMessage("quit : missing " + (requiredAssetsPerTier - (tierAssetCount % requiredAssetsPerTier)) + " to complete set for tier");
                 isValid = false;
                 break;
+            }
+
+            // this could be adapted to a per-tier rule.
+            if(requireIdenticalPerPromotion && tierAssetReceivedCountList.containsKey(tier)) {
+
+                HashMap<Long, Long> assetReceivedCountList = tierAssetReceivedCountList.get(tier);
+
+                for (long assetId : assetReceivedCountList.keySet()) {
+                    if (assetReceivedCountList.get(assetId) % requiredAssetsPerTier != 0) {
+                        transactionContext.logInfoMessage("quit : requireIdenticalPerPromotion : asset " + Long.toUnsignedString(assetId) + " : " + assetReceivedCountList.get(assetId));
+                        return false;
+                    }
+                }
             }
 
             long pickCount = tierAssetCount / requiredAssetsPerTier;
@@ -420,11 +434,11 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         transactionListSpentJA.addAll(transactionList);
 
-        transactionMessageJO.put("amountNQTRecevied", senderBalanceNQT);
+        transactionMessageJO.put("amountNQTReceived", senderBalanceNQT);
         transactionMessageJO.put("amountNQTSpent", totalCostNQT);
     }
 
-    private void categorizeReceivedTransactions(TreeSet<String> transactionList, List<SortedSet<Long>> tieredAssetDefinition, TreeMap<String, JO> transactionCache, TreeMap<String, JO> transactionBalance, HashMap<Integer, Long> countAssetReceivedPerTier, int chainIdForPayment){
+    private void categorizeReceivedTransactions(TreeSet<String> transactionList, List<SortedSet<Long>> tieredAssetDefinition, TreeMap<String, JO> transactionCache, TreeMap<String, JO> transactionBalance, HashMap<Integer, Long> countAssetReceivedPerTier, int chainIdForPayment, HashMap<Integer, HashMap<Long, Long>> tierAssetReceivedCountList){
 
         for (String fullHash: transactionList) {
             JO transactionJO = transactionCache.get(fullHash);
@@ -461,8 +475,28 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
                     transactionContext.logInfoMessage(fullHash + " : received asset : " + assetIdString + "  (+" + assetCount + ")   tier : " + assetTier);
 
-                    assetCount += countAssetReceivedPerTier.get(assetTier);
-                    countAssetReceivedPerTier.put(assetTier, assetCount);
+                    long assetCountTotalPerTier = assetCount;
+
+                    if(countAssetReceivedPerTier.containsKey(assetTier)) {
+                        assetCountTotalPerTier += countAssetReceivedPerTier.get(assetTier);
+                    }
+
+                    countAssetReceivedPerTier.put(assetTier, assetCountTotalPerTier);
+
+                    {
+                        if (!tierAssetReceivedCountList.containsKey(assetTier)) {
+                            tierAssetReceivedCountList.put(assetTier, new HashMap<>());
+                        }
+
+                        HashMap<Long, Long> assetReceivedCountList = tierAssetReceivedCountList.get(assetTier);
+
+                        if (assetReceivedCountList.containsKey(assetId)) {
+                            assetCount += assetReceivedCountList.get(assetId);
+                        }
+
+                        assetReceivedCountList.put(assetId, assetCount);
+                    }
+
                     break; //
                 }
 
@@ -643,45 +677,45 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         JA arrayOfTransactions = response.getArray("transactions");
 
-        int countOfSentTransactions = arrayOfTransactions.size();
-
-        for(int i = 0; i < countOfSentTransactions; i++) {
-            JO transactionJO = arrayOfTransactions.get(i);
+        for (Object transactionObject : arrayOfTransactions) {
+            JO transactionJO = (JO)transactionObject;
 
             int type = transactionJO.getInt("type");
             int subtype = transactionJO.getInt("subtype");
 
-            if(! ((type == 0 && subtype == 0)  || (type == 2 && subtype == 1)))
+            if (!((type == 0 && subtype == 0) || (type == 2 && subtype == 1)))
                 continue;
 
             JO attachment = transactionJO.getJo("attachment");
 
-            if(attachment == null)
+            if (attachment == null)
                 continue;
 
-            if(!attachment.getBoolean("messageIsText"))
+            if (!attachment.getBoolean("messageIsText"))
                 continue;
 
-            if(!attachment.isExist("version.PrunablePlainMessage"))
+            if (!attachment.isExist("version.PrunablePlainMessage"))
                 continue;
 
             String message = attachment.getString("message");
 
-            if(message == null)
+            if (message == null)
                 continue;
             JO messageAsJson = null;
 
-            try { messageAsJson = JO.parse(message); } catch(IllegalArgumentException e) {/* empty */}
+            try {
+                messageAsJson = JO.parse(message);
+            } catch (IllegalArgumentException e) {/* empty */}
 
-            if(messageAsJson == null)
+            if (messageAsJson == null)
                 continue;
 
-            if(!messageAsJson.getString("contract").equals(contractNameString))
+            if (!messageAsJson.getString("contract").equals(contractNameString))
                 continue;
 
             int blockHeight = transactionJO.getInt("height");
 
-            if(blockHeightTrigger < blockHeight) {
+            if (blockHeightTrigger < blockHeight) {
                 blockHeightTrigger = blockHeight;
                 blockIdTrigger = Convert.parseUnsignedLong(transactionJO.getString("block"));
                 timeStampTrigger = transactionJO.getInt("timestamp");
@@ -698,53 +732,41 @@ public class TarascaDAOCardCraft extends AbstractContract {
         JO response = nxt.http.callers.GetExecutedTransactionsCall.create(chainId).recipient(recipient).sender(sender).adminPassword(adminPasswordString).call();
         JA arrayOfTransactions = response.getArray("transactions");
 
-        int countOfSentAssetTransactions = arrayOfTransactions.size();
-
-        for(int i = 0; i < countOfSentAssetTransactions; i++) {
-            JO jo = arrayOfTransactions.get(i);
-
+        for (Object object : arrayOfTransactions) {
+            JO jo = (JO)object;
             JO attachment = jo.getJo("attachment");
 
-            if(attachment == null)
+            if (attachment == null)
                 continue;
 
-            if(!attachment.getBoolean("messageIsText"))
+            if (!attachment.getBoolean("messageIsText"))
                 continue;
 
             String message = attachment.getString("message");
 
-            if(message == null)
+            if (message == null)
                 continue;
 
             JO messageAsJson = null;
 
-            try { messageAsJson = JO.parse(message); } catch(IllegalArgumentException e) {/* empty */}
+            try {
+                messageAsJson = JO.parse(message);
+            } catch (IllegalArgumentException e) {/* empty */}
 
-            if(messageAsJson == null)
+            if (messageAsJson == null)
                 continue;
 
             JA invalidatedTransactionArray = messageAsJson.getArray("transactionSpent");
 
-            if(invalidatedTransactionArray == null)
+            if (invalidatedTransactionArray == null)
                 continue;
 
             int countOfSpentTransactions = invalidatedTransactionArray.size();
             List<String> listSpentFullHash = listStringFromJA(invalidatedTransactionArray);
 
-            for(int j = 0; j < countOfSpentTransactions; j++) {
+            for (int j = 0; j < countOfSpentTransactions; j++) {
                 transactionList.add(listSpentFullHash.get(j));
             }
         }
-    }
-
-    public static byte[] hexStringToByteArray(String s) {
-        int len = s.length();
-        byte[] data = new byte[len / 2];
-
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4) + Character.digit(s.charAt(i + 1), 16));
-        }
-
-        return data;
     }
 }
