@@ -18,7 +18,7 @@
    ],
    
    "tierPromotionRequiredCount": 5,
-   "tierPromotionCost": [10000000000, 30000000000],
+   "tierPromotionCost": [5000000000, 15000000000],
    "requireIdenticalPerPromotion": true,
 
    "paymentAccountRS": ["ARDOR-WDYX-3Q5N-K4HS-CUTKE", "ARDOR-5NCL-DRBZ-XBWF-DDN5T", "ARDOR-4V3B-TVQA-Q6LF-GMH3T"],

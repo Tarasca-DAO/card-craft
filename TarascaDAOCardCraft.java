@@ -691,16 +691,21 @@ public class TarascaDAOCardCraft extends AbstractContract {
             if (attachment == null)
                 continue;
 
-            if (!attachment.getBoolean("messageIsText"))
+            if (!attachment.isExist("version.PrunablePlainMessage"))
                 continue;
 
-            if (!attachment.isExist("version.PrunablePlainMessage"))
+            if(!attachment.isExist("messageIsText")) {
+                continue;
+            }
+
+            if (!attachment.getBoolean("messageIsText"))
                 continue;
 
             String message = attachment.getString("message");
 
             if (message == null)
                 continue;
+
             JO messageAsJson = null;
 
             try {
@@ -710,8 +715,12 @@ public class TarascaDAOCardCraft extends AbstractContract {
             if (messageAsJson == null)
                 continue;
 
-            if (!messageAsJson.getString("contract").equals(contractNameString))
+            if(messageAsJson.isExist("contract")) {
+                if (!messageAsJson.getString("contract").equals(contractNameString))
+                    continue;
+            } else {
                 continue;
+            }
 
             int blockHeight = transactionJO.getInt("height");
 
