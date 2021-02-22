@@ -27,6 +27,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
     private static final TreeMap<String, Integer> invalidationCache =  new TreeMap<>();
     private static final TreeMap<Long, Integer> assetDecimalCache =  new TreeMap<>();
 
+    private static final int transactionDeadline = 1440;
+
     SecureRandom random;
 
     private long feeRateNQTPerFXT = 0;
@@ -156,7 +158,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         getSpentTransactionsFromSentAssetTransactionMessages(transactionListSpent, triggerTransaction.getSenderId(), contractAccount, chainId);
 
-        filterTransactionListAndWithInvalidationCache(transactionListFiltered, transactionListReceived, transactionListSpent);
+        filterTransactionListAndWithInvalidationCache(transactionListFiltered, transactionListReceived, transactionListSpent, transactionCache);
 
         HashMap<Integer, HashMap<Long, Long>> tierAssetReceivedCountList = new HashMap<>();
         categorizeReceivedTransactions(transactionListFiltered, listSetTierDefinition, transactionCache, transactionBalance, countAssetReceivedPerTier, chainId, tierAssetReceivedCountList);
@@ -179,7 +181,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
             invalidationCache.entrySet().removeIf(entry -> (entry.getValue() < timestampCacheExpiry ));
 
             for(String fullHash: transactionListFiltered) {
-                invalidationCache.put(fullHash, Nxt.getEpochTime());
+                invalidationCache.put(generateTransactionInvalidationHash(transactionCache, fullHash), Nxt.getEpochTime());
             }
         }
         broadcastPickedAssets(context, chainId, assetListPick);
@@ -243,7 +245,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .ecBlockHeight(blockHeightTrigger)
                     .ecBlockId(blockIdTrigger)
                     .timestamp(timeStampTrigger)
-                    .deadline(1440)
+                    .deadline(transactionDeadline)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .broadcast(true)
                     .call();
@@ -262,7 +264,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .ecBlockHeight(blockHeightTrigger)
                     .ecBlockId(blockIdTrigger)
                     .timestamp(timeStampTrigger)
-                    .deadline(1440)
+                    .deadline(transactionDeadline)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .asset(assetId)
                     .quantityQNT(quantityQNT)
@@ -324,7 +326,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .ecBlockHeight(blockHeightTrigger)
                     .ecBlockId(blockIdTrigger)
                     .timestamp(timeStampTrigger)
-                    .deadline(1440)
+                    .deadline(transactionDeadline)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .amountNQT(amountNQT)
                     .broadcast(true)
@@ -349,7 +351,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 .ecBlockHeight(blockHeightTrigger)
                 .ecBlockId(blockIdTrigger)
                 .timestamp(timeStampTrigger)
-                .deadline(1440)
+                .deadline(transactionDeadline)
                 .feeNQT(returnFeeNQT)
                 .amountNQT(amountNQT)
                 .broadcast(true)
@@ -522,6 +524,11 @@ public class TarascaDAOCardCraft extends AbstractContract {
         }
     }
 
+    private String generateTransactionInvalidationHash(TreeMap<String, JO> transactionCache, String fullHash) {
+        JO transactionJO = transactionCache.get(fullHash);
+        return transactionJO.getString("block") + fullHash;
+    }
+
     private int getAssetDecimals(long assetId) {
         int assetDecimal = 0;
 
@@ -650,7 +657,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         return list;
     }
 
-    private void filterTransactionListAndWithInvalidationCache(TreeSet<String> transactionListFiltered, TreeSet<String> transactionListReceived, TreeSet<String> transactionListSpent) {
+    private void filterTransactionListAndWithInvalidationCache(TreeSet<String> transactionListFiltered, TreeSet<String> transactionListReceived, TreeSet<String> transactionListSpent, TreeMap<String, JO> transactionCache) {
 
         for (String fullHash: transactionListReceived) {
 
@@ -658,7 +665,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 continue;
 
             synchronized (invalidationCache) {
-                if (invalidationCache.containsKey(fullHash)) {
+                if (invalidationCache.containsKey(generateTransactionInvalidationHash(transactionCache, fullHash))) {
                     continue;
                 }
             }
@@ -668,6 +675,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
     }
 
     private void getReceivedTransactions(TreeSet<String> transactionList, TreeMap<String, JO> transactionCache, long recipient, long sender, int chainId, String contractNameString) {
+
+        int triggerTransactionHeight = transactionContext.getTransaction().getHeight();
 
         JO response = nxt.http.callers.GetExecutedTransactionsCall.create(chainId)
                 .adminPassword(adminPasswordString)
@@ -723,6 +732,10 @@ public class TarascaDAOCardCraft extends AbstractContract {
             }
 
             int blockHeight = transactionJO.getInt("height");
+
+            if(blockHeight > triggerTransactionHeight) {
+                break;
+            }
 
             if (blockHeightTrigger < blockHeight) {
                 blockHeightTrigger = blockHeight;
