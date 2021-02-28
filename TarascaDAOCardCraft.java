@@ -139,6 +139,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
         if(listSetTierDefinition.size() == 0)
             return new JO();
 
+        transactionContext.logInfoMessage("fork: " + triggerTransaction.getHeight() + " : " + Long.toUnsignedString(triggerTransaction.getBlockId()));
+
         TreeMap<String, JO> transactionBalance = new TreeMap<>();
         HashMap<Integer, Long> countAssetReceivedPerTier = new HashMap<>();
 
