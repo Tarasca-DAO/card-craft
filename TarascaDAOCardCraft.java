@@ -42,9 +42,52 @@ public class TarascaDAOCardCraft extends AbstractContract {
     byte[] privateKey;
     String adminPasswordString;
 
-    int blockHeightTrigger = 0;
-    long blockIdTrigger = 0;
-    int timeStampTrigger = 0;
+    public static class ApplicationTransactions {
+        public TreeSet<String> transactionHashListFiltered = new TreeSet<>();
+        public TreeSet<String> transactionHashListSpent = new TreeSet<>();
+        public TreeMap<String, JO> transactionCache = new TreeMap<>();
+        public TreeMap<String, JO> transactionListPayments = new TreeMap<>();
+
+        public int ecBlockHeight = 0;
+        public long ecBlockId = 0;
+        public int timeStamp = 0;
+
+        public void putPaymentTransaction(JO transactionJO) {
+            String fullHash = transactionJO.getString("fullHash");
+
+            if(!transactionListPayments.containsKey(fullHash)) {
+                transactionListPayments.put(fullHash, transactionJO);
+
+                int height = transactionJO.getInt("height");
+
+                if(ecBlockHeight < height) {
+                    ecBlockHeight = height;
+
+                    JO response = nxt.http.callers.GetBlockCall.create().height(ecBlockHeight).call();
+
+                    ecBlockId = Convert.parseUnsignedLong(response.getString("block"));
+                    timeStamp = response.getInt("timestamp");
+                }
+            }
+        }
+
+        public void updateEcBlock(TransactionContext context) {
+            TransactionResponse triggerTransaction = context.getTransaction();
+
+            if(ecBlockHeight == triggerTransaction.getHeight()) {
+                long contextEcBlockId = context.getBlock().getBlockId();
+
+                // overwrite getExecutedTransactions that may return stale block on fork change
+
+                if(ecBlockId != contextEcBlockId) {
+                    context.logInfoMessage("ecBlockId : " + ecBlockId + " replaced with : " + contextEcBlockId);
+
+                    ecBlockId = contextEcBlockId;
+                    timeStamp = context.getBlock().getTimestamp();
+                }
+            }
+        }
+    }
 
     @ValidateContractRunnerIsRecipient
     public JO processTransaction(TransactionContext context) {
@@ -72,7 +115,6 @@ public class TarascaDAOCardCraft extends AbstractContract {
             return new JO();
         }
 
-
         JA jsonTierArray = params.getArray("tieredAssetIds");
         JA jsonTierPromotionCostArray = params.getArray("tierPromotionCost");
         long assetCountForPromotion = Convert.parseUnsignedLong(params.getString("tierPromotionRequiredCount"));
@@ -91,7 +133,6 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         long returnFeeNQT = Convert.parseUnsignedLong(params.getString("returnFeeNQT"));
         long returnMinimumNQT = Convert.parseUnsignedLong(params.getString("returnMinimumNQT"));
-
 
         if(jsonTierArray.toJSONArray().size() <= 1 || (jsonTierArray.toJSONArray().size() != (jsonTierPromotionCostArray.toJSONArray().size() + 1)))
             return new JO(); // contract not yet configured
@@ -139,7 +180,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         if(listSetTierDefinition.size() == 0)
             return new JO();
 
-        transactionContext.logInfoMessage("fork: " + triggerTransaction.getHeight() + " : " + Long.toUnsignedString(triggerTransaction.getBlockId()));
+        ApplicationTransactions applicationTransactions = new ApplicationTransactions();
 
         TreeMap<String, JO> transactionBalance = new TreeMap<>();
         HashMap<Integer, Long> countAssetReceivedPerTier = new HashMap<>();
@@ -148,54 +189,60 @@ public class TarascaDAOCardCraft extends AbstractContract {
             countAssetReceivedPerTier.put(i, (long) 0);
         }
 
-        TreeSet<String> transactionListFiltered = new TreeSet<>();
         TreeSet<String> transactionListReceived = new TreeSet<>();
-        TreeSet<String> transactionListSpent = new TreeSet<>();
-        TreeMap<String, JO> transactionCache = new TreeMap<>();
 
-        getReceivedTransactions(transactionListReceived, transactionCache, contractAccount, triggerTransaction.getSenderId(), chainId, contractNameString);
+        getReceivedTransactions(transactionListReceived, applicationTransactions, contractAccount, triggerTransaction.getSenderId(), chainId, contractNameString);
 
         /* NOTE If assets or payments are manually returned then these spent transaction's fullHash should be specified
            in the message attachment as JSON in string array "transactionSpent". */
 
-        getSpentTransactionsFromSentAssetTransactionMessages(transactionListSpent, triggerTransaction.getSenderId(), contractAccount, chainId);
+        getSpentTransactionsFromSentAssetTransactionMessages(applicationTransactions, triggerTransaction.getSenderId(), contractAccount, chainId);
 
-        filterTransactionListAndWithInvalidationCache(transactionListFiltered, transactionListReceived, transactionListSpent, transactionCache);
+        filterTransactionListAndWithInvalidationCache(applicationTransactions, transactionListReceived);
 
         HashMap<Integer, HashMap<Long, Long>> tierAssetReceivedCountList = new HashMap<>();
-        categorizeReceivedTransactions(transactionListFiltered, listSetTierDefinition, transactionCache, transactionBalance, countAssetReceivedPerTier, chainId, tierAssetReceivedCountList);
+        categorizeReceivedTransactions(applicationTransactions, listSetTierDefinition, transactionBalance, countAssetReceivedPerTier, chainId, tierAssetReceivedCountList);
 
         prepareRandom(context);
 
         HashMap<Long, Long> assetListPick = new HashMap<>();
         boolean validSetsAndBalance = verifyAllSetsCompletedAndCalculateTotalCostAndPickAssets(countAssetReceivedPerTier, listTierPromotionCost, assetCountForPromotion, listSetTierDefinition, assetListPick, tierAssetReceivedCountList, requireIdenticalPerPromotion);
 
+        applicationTransactions.updateEcBlock(context);
+
+        transactionContext.logInfoMessage("triggerFullHash: " + Convert.toHexString(triggerTransaction.getFullHash()) + " : " + triggerTransaction.getChainId());
+        transactionContext.logInfoMessage("fork           : " + triggerTransaction.getHeight() + " : " + Long.toUnsignedString(triggerTransaction.getBlockId()));
+        transactionContext.logInfoMessage("transaction EC : " + applicationTransactions.ecBlockHeight + " : " + Long.toUnsignedString(applicationTransactions.ecBlockId));
+
         if(!validSetsAndBalance) {
             context.logInfoMessage("balance : " + (senderBalanceNQT - totalCostNQT) + " = " + senderBalanceNQT + " - " + totalCostNQT);
             return new JO();
         }
 
-        transactionMessageJOAppendContext(context, contractNameString, transactionListFiltered);
+        transactionMessageJOAppendContext(context, contractNameString, applicationTransactions);
 
         int timestampCacheExpiry = Nxt.getEpochTime() - 24 * 60 * 60 * 2;
 
         synchronized (invalidationCache) {
             invalidationCache.entrySet().removeIf(entry -> (entry.getValue() < timestampCacheExpiry ));
 
-            for(String fullHash: transactionListFiltered) {
-                invalidationCache.put(generateTransactionInvalidationHash(transactionCache, fullHash), Nxt.getEpochTime());
+            for(String fullHash: applicationTransactions.transactionHashListFiltered) {
+                invalidationCache.put(generateTransactionInvalidationHash(applicationTransactions, fullHash), Nxt.getEpochTime());
             }
         }
-        broadcastPickedAssets(context, chainId, assetListPick);
 
-        broadcastReturnExcessPayment(context, returnFeeNQT, returnMinimumNQT, chainId);
+        broadcastPickedAssets(context, chainId, assetListPick, applicationTransactions);
 
-        broadcastPaymentSplit(context, listPaymentAccount, listPaymentSplit, chainId);
+        broadcastReturnExcessPayment(context, returnFeeNQT, returnMinimumNQT, chainId, applicationTransactions);
+
+        broadcastPaymentSplit(context, listPaymentAccount, listPaymentSplit, chainId, applicationTransactions);
 
         return context.getResponse();
     }
 
     private void prepareRandom(TransactionContext context) {
+        TransactionResponse triggerTransaction = context.getTransaction();
+
         JO params = context.getContractRunnerConfigParams(getClass().getSimpleName());
 
         try {
@@ -223,8 +270,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
         }
 
         // random seed derived from long from HASH(secretForRandomSerialString | serial | getBlockId | getFullHash)
-        digest.update(ByteBuffer.allocate(Long.BYTES).putLong(blockIdTrigger).array());
-        digest.update(context.getTransaction().getFullHash());
+        digest.update(ByteBuffer.allocate(Long.BYTES).putLong(triggerTransaction.getBlockId()).array());
+        digest.update(triggerTransaction.getFullHash());
 
         long derivedSeedForAssetPick = ByteBuffer.wrap(digest.digest(), 0, 8).getLong();
         random.setSeed(derivedSeedForAssetPick);
@@ -232,7 +279,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         transactionContext.logInfoMessage("random seed for invocation: " + derivedSeedForAssetPick);
     }
 
-    private void broadcastPickedAssets(TransactionContext context, int chainId, HashMap<Long, Long> assetListPick) {
+    private void broadcastPickedAssets(TransactionContext context, int chainId, HashMap<Long, Long> assetListPick, ApplicationTransactions applicationTransactions) {
         JO messageAttachment = transactionMessageJO;
 
         if(assetListPick.size() > 1) {
@@ -244,9 +291,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .privateKey(privateKey)
                     .recipient(context.getTransaction().getSenderId())
                     .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                    .ecBlockHeight(blockHeightTrigger)
-                    .ecBlockId(blockIdTrigger)
-                    .timestamp(timeStampTrigger)
+                    .ecBlockHeight(applicationTransactions.ecBlockHeight)
+                    .ecBlockId(applicationTransactions.ecBlockId)
+                    .timestamp(applicationTransactions.timeStamp)
                     .deadline(transactionDeadline)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .broadcast(true)
@@ -263,9 +310,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .privateKey(privateKey)
                     .recipient(context.getTransaction().getSenderId())
                     .message(messageAttachment.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                    .ecBlockHeight(blockHeightTrigger)
-                    .ecBlockId(blockIdTrigger)
-                    .timestamp(timeStampTrigger)
+                    .ecBlockHeight(applicationTransactions.ecBlockHeight)
+                    .ecBlockId(applicationTransactions.ecBlockId)
+                    .timestamp(applicationTransactions.timeStamp)
                     .deadline(transactionDeadline)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .asset(assetId)
@@ -302,7 +349,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         return assetId;
     }
 
-    private void broadcastPaymentSplit(TransactionContext context, List<Long> listAccounts, List<Double> listFraction, int chainId) {
+    private void broadcastPaymentSplit(TransactionContext context, List<Long> listAccounts, List<Double> listFraction, int chainId, ApplicationTransactions applicationTransactions) {
 
         if(listAccounts == null || listFraction == null)
             return;
@@ -325,9 +372,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                     .privateKey(privateKey)
                     .recipient(recipient)
                     .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                    .ecBlockHeight(blockHeightTrigger)
-                    .ecBlockId(blockIdTrigger)
-                    .timestamp(timeStampTrigger)
+                    .ecBlockHeight(applicationTransactions.ecBlockHeight)
+                    .ecBlockId(applicationTransactions.ecBlockId)
+                    .timestamp(applicationTransactions.timeStamp)
                     .deadline(transactionDeadline)
                     .feeRateNQTPerFXT(feeRateNQTPerFXT)
                     .amountNQT(amountNQT)
@@ -338,7 +385,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         }
     }
 
-    private void broadcastReturnExcessPayment(TransactionContext context, long returnFeeNQT, long returnMinimumNQT, int chainId) {
+    private void broadcastReturnExcessPayment(TransactionContext context, long returnFeeNQT, long returnMinimumNQT, int chainId, ApplicationTransactions applicationTransactions) {
         long recipient = context.getTransaction().getSenderId();
 
         long amountNQT = senderBalanceNQT - (totalCostNQT + returnFeeNQT);
@@ -350,9 +397,9 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 .privateKey(privateKey)
                 .recipient(recipient)
                 .message(transactionMessageJO.toJSONString()).messageIsText(true).messageIsPrunable(true)
-                .ecBlockHeight(blockHeightTrigger)
-                .ecBlockId(blockIdTrigger)
-                .timestamp(timeStampTrigger)
+                .ecBlockHeight(applicationTransactions.ecBlockHeight)
+                .ecBlockId(applicationTransactions.ecBlockId)
+                .timestamp(applicationTransactions.timeStamp)
                 .deadline(transactionDeadline)
                 .feeNQT(returnFeeNQT)
                 .amountNQT(amountNQT)
@@ -424,7 +471,7 @@ public class TarascaDAOCardCraft extends AbstractContract {
         return isValid;
     }
 
-    private void transactionMessageJOAppendContext(TransactionContext context, String contractNameString, TreeSet<String> transactionList) {
+    private void transactionMessageJOAppendContext(TransactionContext context, String contractNameString, ApplicationTransactions applicationTransactions) {
         transactionMessageJO.put("submittedBy", contractNameString);
         transactionMessageJO.put("transactionTrigger", Convert.toHexString(context.getTransaction().getFullHash()));
 
@@ -436,16 +483,16 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
         transactionMessageJO.put("transactionSpent", transactionListSpentJA);
 
-        transactionListSpentJA.addAll(transactionList);
+        transactionListSpentJA.addAll(applicationTransactions.transactionHashListFiltered);
 
         transactionMessageJO.put("amountNQTReceived", senderBalanceNQT);
         transactionMessageJO.put("amountNQTSpent", totalCostNQT);
     }
 
-    private void categorizeReceivedTransactions(TreeSet<String> transactionList, List<SortedSet<Long>> tieredAssetDefinition, TreeMap<String, JO> transactionCache, TreeMap<String, JO> transactionBalance, HashMap<Integer, Long> countAssetReceivedPerTier, int chainIdForPayment, HashMap<Integer, HashMap<Long, Long>> tierAssetReceivedCountList){
+    private void categorizeReceivedTransactions(ApplicationTransactions applicationTransactions, List<SortedSet<Long>> tieredAssetDefinition, TreeMap<String, JO> transactionBalance, HashMap<Integer, Long> countAssetReceivedPerTier, int chainIdForPayment, HashMap<Integer, HashMap<Long, Long>> tierAssetReceivedCountList){
 
-        for (String fullHash: transactionList) {
-            JO transactionJO = transactionCache.get(fullHash);
+        for (String fullHash: applicationTransactions.transactionHashListFiltered) {
+            JO transactionJO = applicationTransactions.transactionCache.get(fullHash);
 
             int type = transactionJO.getInt("type");
             int subtype = transactionJO.getInt("subtype");
@@ -501,6 +548,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
                         assetReceivedCountList.put(assetId, assetCount);
                     }
 
+                    applicationTransactions.putPaymentTransaction(transactionJO);
+
                     break; //
                 }
 
@@ -518,6 +567,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
 
                     transactionContext.logInfoMessage(fullHash + " : received amountNQT : " + transactionJO.getLong("amountNQT"));
 
+                    applicationTransactions.putPaymentTransaction(transactionJO);
+
                     break;
                 }
 
@@ -526,8 +577,8 @@ public class TarascaDAOCardCraft extends AbstractContract {
         }
     }
 
-    private String generateTransactionInvalidationHash(TreeMap<String, JO> transactionCache, String fullHash) {
-        JO transactionJO = transactionCache.get(fullHash);
+    private String generateTransactionInvalidationHash(ApplicationTransactions applicationTransactions, String fullHash) {
+        JO transactionJO = applicationTransactions.transactionCache.get(fullHash);
         return transactionJO.getString("block") + fullHash;
     }
 
@@ -659,24 +710,24 @@ public class TarascaDAOCardCraft extends AbstractContract {
         return list;
     }
 
-    private void filterTransactionListAndWithInvalidationCache(TreeSet<String> transactionListFiltered, TreeSet<String> transactionListReceived, TreeSet<String> transactionListSpent, TreeMap<String, JO> transactionCache) {
+    private void filterTransactionListAndWithInvalidationCache(ApplicationTransactions applicationTransactions, TreeSet<String> transactionListReceived) {
 
         for (String fullHash: transactionListReceived) {
 
-            if(transactionListSpent.contains(fullHash))
+            if(applicationTransactions.transactionHashListSpent.contains(fullHash))
                 continue;
 
             synchronized (invalidationCache) {
-                if (invalidationCache.containsKey(generateTransactionInvalidationHash(transactionCache, fullHash))) {
+                if (invalidationCache.containsKey(generateTransactionInvalidationHash(applicationTransactions, fullHash))) {
                     continue;
                 }
             }
 
-            transactionListFiltered.add(fullHash);
+            applicationTransactions.transactionHashListFiltered.add(fullHash);
         }
     }
 
-    private void getReceivedTransactions(TreeSet<String> transactionList, TreeMap<String, JO> transactionCache, long recipient, long sender, int chainId, String contractNameString) {
+    private void getReceivedTransactions(TreeSet<String> transactionList, ApplicationTransactions applicationTransactions, long recipient, long sender, int chainId, String contractNameString) {
 
         int triggerTransactionHeight = transactionContext.getTransaction().getHeight();
 
@@ -739,19 +790,13 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 break;
             }
 
-            if (blockHeightTrigger < blockHeight) {
-                blockHeightTrigger = blockHeight;
-                blockIdTrigger = Convert.parseUnsignedLong(transactionJO.getString("block"));
-                timeStampTrigger = transactionJO.getInt("timestamp");
-            }
-
             String fullHashString = transactionJO.getString("fullHash");
             transactionList.add(fullHashString);
-            transactionCache.put(fullHashString, transactionJO);
+            applicationTransactions.transactionCache.put(fullHashString, transactionJO);
         }
     }
 
-    private void getSpentTransactionsFromSentAssetTransactionMessages(TreeSet<String> transactionList, long recipient, long sender, int chainId) {
+    private void getSpentTransactionsFromSentAssetTransactionMessages(ApplicationTransactions applicationTransactions, long recipient, long sender, int chainId) {
 
         JO response = nxt.http.callers.GetExecutedTransactionsCall.create(chainId).recipient(recipient).sender(sender).adminPassword(adminPasswordString).call();
         JA arrayOfTransactions = response.getArray("transactions");
@@ -786,10 +831,10 @@ public class TarascaDAOCardCraft extends AbstractContract {
                 continue;
 
             int countOfSpentTransactions = invalidatedTransactionArray.size();
-            List<String> listSpentFullHash = listStringFromJA(invalidatedTransactionArray);
+            List<String> listFullHashSpent = listStringFromJA(invalidatedTransactionArray);
 
             for (int j = 0; j < countOfSpentTransactions; j++) {
-                transactionList.add(listSpentFullHash.get(j));
+                applicationTransactions.transactionHashListSpent.add(listFullHashSpent.get(j));
             }
         }
     }
